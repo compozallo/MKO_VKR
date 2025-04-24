@@ -226,3 +226,32 @@ def plot_to_base64(plt):
     buffer.seek(0)
     image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
     return f"data:image/png;base64,{image_base64}"
+
+# Пример использования с реальными данными БКНС
+input_values = {
+    'Мощность насосов (кВт) ↑': 55,
+    'Давление на выходе (атм) ↑': 16,
+    'Потребление тока (А) ↓': 100,
+    'Энергопотребление (кВт·ч) ↓': 75,
+    'Износ оборудования (%) ↓ [0-100]': 20,
+    'Температура двигателя (°C) ↓ [0-120]': 80,
+    'Квалификация рабочих (баллы) ↑ [0-10]': 7,
+    'КПД насоса (%) ↑ [0-100]': 85,
+    'Затраты на ТО (руб/ч) ↓': 500,
+    'Возраст оборудования (лет) ↓': 5
+}
+
+optimizer = ParetoOptimizer()
+optimizer.generate_solutions(100, input_values)
+
+# Создание графиков
+plot_all = create_plot_all(optimizer)
+plot_pareto = create_plot_pareto(optimizer)
+
+# Пример выбора точки
+x, y = 60, 90
+plot_selected = create_plot_selected(optimizer, x, y)
+
+# Получение рекомендаций
+recommendations = optimizer.get_recommendations()
+print(recommendations)
