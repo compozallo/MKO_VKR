@@ -1,257 +1,280 @@
+# MKO_opt.py (functional part)
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from io import BytesIO
-import base64
+import yadisk
+import pandas as pd
+import os
 
 class ParetoOptimizer:
     def __init__(self):
+        # Основные критерии оптимизации
         self.criteria_names = [
             'Мощность насосов (кВт) ↑',
             'Давление на выходе (атм) ↑',
-            'Потребление тока (А) ↓',
-            'Энергопотребление (кВт·ч) ↓',
             'Износ оборудования (%) ↓ [0-100]',
-            'Температура двигателя (°C) ↓ [0-120]',
-            'Квалификация рабочих (баллы) ↑ [0-10]',
-            'КПД насоса (%) ↑ [0-100]',
             'Затраты на ТО (руб/ч) ↓',
-            'Возраст оборудования (лет) ↓'
+            'Возраст оборудования (лет) ↓',
+            'Общая эффективность ↑'
         ]
+
+        # Параметры насоса
+        self.pump_params = {
+            'КПД насоса (%) ↑ [0-100]': 85,
+            'Макс. давление насоса (атм)': 25,
+            'Минимальный расход (м3/ч)': 10,
+            'Макс. расход (м3/ч)': 50
+        }
 
         self.num_criteria = len(self.criteria_names)
 
+        # Ограничения для критериев
         self.criteria_limits = {
             'Износ оборудования (%) ↓ [0-100]': (0, 100),
-            'Температура двигателя (°C) ↓ [0-120]': (0, 120),
-            'Квалификация рабочих (баллы) ↑ [0-10]': (0, 10),
-            'КПД насоса (%) ↑ [0-100]': (0, 100)
+            'Давление на выходе (атм) ↑': (0, 25),
+            'Мощность насосов (кВт) ↑': (0, 100)
         }
 
+        # Инициализация переменных
         self.solutions = None
         self.pareto_front = None
         self.optimal_point = None
         self.normalized = None
         self.current_values = None
-        self.productivity = None
-        self.current_consumption = None
+        self.objectives = None
 
-    def calculate_current_consumption(self, power, voltage=380, efficiency=0.9):
-        return power / (voltage * efficiency * np.sqrt(3))
+        # Коэффициенты для расчета системы
+        self.system_params = {
+            'hydraulic_coeff': 0.85,
+            'pump_efficiency_coeff': 0.6,
+            'wear_impact': 0.3,
+            'maintenance_impact': 0.2,
+            'age_impact': 0.15,
+            'productivity_coeff': 0.12,
+            'pressure_factor': 0.5
+        }
+
+        # Прогнозные данные
+        self.last_forecast_value = None
+        self.load_forecast_data()
+
+    def load_forecast_data(self):
+        """Загрузка прогнозных данных из CSV"""
+        try:
+            y = yadisk.YaDisk(token="y0__xDypu3yARjTsTcgx67a-RJgY8JQajMm1lnIvrfxvQbbjE-r-g")
+            if y.check_token():
+                if not os.path.exists("forecast_downloaded.csv"):
+                    y.download("/ВКР/forecast.csv", "forecast_downloaded.csv")
+
+                df = pd.read_csv("forecast_downloaded.csv", header=None, names=['timestamp', 'value'])
+                self.last_forecast_value = float(df.iloc[-1]['value'])
+        except Exception as e:
+            print(f"Ошибка загрузки прогнозных данных: {e}")
+            self.last_forecast_value = 50.0
+
+    def calculate_system_efficiency(self, params):
+        """Расчет КПД системы"""
+        pump_efficiency = params['КПД насоса (%) ↑ [0-100]'] / 100
+        wear_impact = (100 - params['Износ оборудования (%) ↓ [0-100]']) / 100
+        maintenance_impact = 1 - (params['Затраты на ТО (руб/ч) ↓'] / 2000)
+        age_impact = 1 - (params['Возраст оборудования (лет) ↓'] / 20)
+
+        forecast_impact = 0
+        if self.last_forecast_value:
+            forecast_impact = (self.last_forecast_value - 50) / 100
+
+        system_efficiency = (
+            pump_efficiency * self.system_params['pump_efficiency_coeff'] +
+            self.system_params['hydraulic_coeff'] * (1 - self.system_params['pump_efficiency_coeff']) -
+            wear_impact * self.system_params['wear_impact'] -
+            (1 - maintenance_impact) * self.system_params['maintenance_impact'] -
+            (1 - age_impact) * self.system_params['age_impact'] +
+            forecast_impact * 0.1
+        )
+
+        return max(0, min(1, system_efficiency)) * 100
+
+    def calculate_productivity(self, power, efficiency, pressure):
+        """Расчет производительности системы (т/ч)"""
+        base_productivity = power * (efficiency / 100) * self.system_params['productivity_coeff']
+        pressure_factor = 1 + (pressure / self.pump_params['Макс. давление насоса (атм)']) * self.system_params['pressure_factor']
+        return base_productivity * pressure_factor
+
+    def calculate_overall_efficiency(self, productivity, system_efficiency):
+        """Расчет общей эффективности"""
+        return (productivity * 0.4 + system_efficiency * 0.6) * 0.9
 
     def generate_solutions(self, num_solutions, input_values):
+        """Генерация решений"""
         self.current_values = input_values.copy()
-        base = np.array([input_values[name] for name in self.criteria_names])
         self.solutions = np.zeros((num_solutions, self.num_criteria))
 
+        # Генерация случайных решений в пределах допустимых границ
         for i, name in enumerate(self.criteria_names):
-            current_value = input_values[name]
-
-            if i % 3 == 0:
-                values = np.random.normal(current_value, 0.2*current_value, num_solutions)
-            elif i % 3 == 1:
-                lower, upper = 0.7 * current_value, 1.3 * current_value
-                values = np.random.uniform(lower, upper, num_solutions)
-            else:
-                values = current_value * np.random.beta(2, 5, num_solutions) * 2
+            current_val = input_values[name]
 
             if name in self.criteria_limits:
-                min_limit, max_limit = self.criteria_limits[name]
-                values = np.clip(values, min_limit, max_limit)
+                min_val, max_val = self.criteria_limits[name]
+                self.solutions[:, i] = np.random.uniform(
+                    max(min_val, current_val * 0.7),
+                    min(max_val, current_val * 1.3),
+                    num_solutions
+                )
+            else:
+                self.solutions[:, i] = np.random.normal(
+                    current_val,
+                    current_val * 0.15,
+                    num_solutions
+                )
 
-            self.solutions[:, i] = values
+        # Расчет производных параметров
+        system_efficiencies = []
+        productivities = []
+        overall_efficiencies = []
 
-        power_idx = self.criteria_names.index('Мощность насосов (кВт) ↑')
-        efficiency_idx = self.criteria_names.index('КПД насоса (%) ↑ [0-100]')
-        current_consumption = self.calculate_current_consumption(
-            self.solutions[:, power_idx],
-            efficiency=self.solutions[:, efficiency_idx]/100
-        )
-        self.solutions[:, 2] = current_consumption
+        for sol in self.solutions:
+            params = dict(zip(self.criteria_names, sol))
+            params.update(self.pump_params)
 
-        self.productivity = (
-            0.4 * self.solutions[:, 0] +
-            0.3 * self.solutions[:, 1] +
-            0.2 * self.solutions[:, 7] -
-            0.1 * self.solutions[:, 4]
-        )
+            # Расчет КПД системы
+            eff = self.calculate_system_efficiency(params)
+            system_efficiencies.append(eff)
 
-        self.current_consumption = self.solutions[:, 2]
+            # Расчет производительности
+            power = params['Мощность насосов (кВт) ↑']
+            pump_eff = params['КПД насоса (%) ↑ [0-100]']
+            pressure = params['Давление на выходе (атм) ↑']
+            prod = self.calculate_productivity(power, pump_eff, pressure)
+            productivities.append(prod)
 
-        self.normalized = np.column_stack([
-            (self.productivity - np.min(self.productivity)) / (np.max(self.productivity) - np.min(self.productivity)),
-            (1 - (self.current_consumption - np.min(self.current_consumption)) /
-             (np.max(self.current_consumption) - np.min(self.current_consumption)))
+            # Расчет общей эффективности
+            overall_eff = self.calculate_overall_efficiency(prod, eff)
+            overall_efficiencies.append(overall_eff)
+
+        # Добавляем расчетные параметры в objectives
+        self.objectives = np.column_stack([
+            productivities,  # Производительность (т/ч)
+            system_efficiencies,  # КПД системы (%)
+            overall_efficiencies  # Общая эффективность
         ])
 
-        is_efficient = np.ones(num_solutions, dtype=bool)
-        for i, c in enumerate(self.normalized):
-            if is_efficient[i]:
-                is_efficient[is_efficient] = np.any(self.normalized[is_efficient] > c, axis=1)
-                is_efficient[i] = True
+        # Сначала строим все решения
+        is_efficient = self._find_pareto_front(self.objectives[:, :2])  # Используем только производительность и КПД
+        self.pareto_front = self.objectives[is_efficient]
 
-        self.pareto_front = np.column_stack([self.productivity, self.current_consumption])[is_efficient]
+        # Находим оптимальное решение как точку с максимальной общей эффективностью
         if len(self.pareto_front) > 0:
-            self.optimal_point = self.pareto_front[np.argmax(
-                self.normalized[is_efficient, 0] + self.normalized[is_efficient, 1]
-            )]
-        else:
-            self.optimal_point = None
+            optimal_idx = np.argmax(self.pareto_front[:, 2])  # Индекс с максимальной общей эффективностью
+            self.optimal_point = self.pareto_front[optimal_idx]
 
-        return self.productivity, self.current_consumption
+        return productivities, system_efficiencies, overall_efficiencies
+
+    def _find_pareto_front(self, points):
+        """Улучшенный алгоритм нахождения Парето-фронта (для максимизации обоих критериев)"""
+        # Сортируем точки по убыванию первого критерия (производительности)
+        sorted_indices = np.argsort(-points[:, 0])
+        sorted_points = points[sorted_indices]
+        
+        pareto_indices = []
+        max_eff = -np.inf
+        
+        for i in range(len(sorted_points)):
+            current_eff = sorted_points[i, 1]  # Текущий КПД
+            
+            # Если текущий КПД больше максимального найденного, добавляем в Парето-фронт
+            if current_eff > max_eff:
+                pareto_indices.append(sorted_indices[i])
+                max_eff = current_eff
+        
+        # Создаем маску для всех точек
+        is_efficient = np.zeros(points.shape[0], dtype=bool)
+        is_efficient[pareto_indices] = True
+        
+        return is_efficient
 
     def find_closest_solution(self, x, y):
+        """Поиск ближайшего решения"""
         if self.solutions is None:
             return None
 
-        distances = np.sqrt((self.productivity - x)**2 + (self.current_consumption - y)**2)
-        closest_idx = np.argmin(distances)
-        return closest_idx
+        distances = np.sqrt(
+            (self.objectives[:, 0] - x)**2 +
+            (self.objectives[:, 1] - y)**2
+        )
+        return np.argmin(distances)
 
     def get_recommendations(self, solution_idx=None):
+        """Генерация рекомендаций"""
         if solution_idx is None:
-            input_values = self.current_values
+            current_values = self.current_values
         else:
-            input_values = {name: self.solutions[solution_idx, i]
-                          for i, name in enumerate(self.criteria_names)}
+            current_values = dict(zip(self.criteria_names, self.solutions[solution_idx]))
 
         recommendations = []
+
+        # Рекомендации по основным параметрам
         for name in self.criteria_names:
-            current = input_values[name]
+            current = current_values[name]
 
             if name in self.criteria_limits:
                 min_limit, max_limit = self.criteria_limits[name]
-                if '↑' in name and current >= max_limit:
-                    recommendations.append(f"{name}: уже на максимуме ({max_limit})")
-                    continue
-                elif '↓' in name and current <= min_limit:
-                    recommendations.append(f"{name}: уже на минимуме ({min_limit})")
-                    continue
+                if '↑' in name and current >= max_limit * 0.95:
+                    recommendations.append(f"{name}: значение близко к максимуму ({current:.1f} из {max_limit})")
+                elif '↓' in name and current <= min_limit * 1.05:
+                    recommendations.append(f"{name}: значение близко к минимуму ({current:.1f} из {min_limit})")
+                else:
+                    if '↑' in name:
+                        rec = f"{name}: можно увеличить до {max_limit:.1f} (текущее {current:.1f})"
+                    else:
+                        rec = f"{name}: можно уменьшить до {min_limit:.1f} (текущее {current:.1f})"
+                    recommendations.append(rec)
 
-            if '↑' in name:
-                rec = f"{name}: +{current*0.15:.1f} (рекомендуется)"
-            else:
-                rec = f"{name}: -{current*0.15:.1f} (рекомендуется)"
-            recommendations.append(rec)
+        # Расчет производных параметров для рекомендаций
+        params = {**current_values, **self.pump_params}
+        system_eff = self.calculate_system_efficiency(params)
+        productivity = self.calculate_productivity(
+            params['Мощность насосов (кВт) ↑'],
+            params['КПД насоса (%) ↑ [0-100]'],
+            params['Давление на выходе (атм) ↑']
+        )
+        
+        recommendations.append(f"Расчетный КПД системы: {system_eff:.1f}%")
+        recommendations.append(f"Расчетная производительность: {productivity:.1f} т/ч")
+
+        # Сравнение с оптимальным решением
+        if self.optimal_point is not None and solution_idx is not None:
+            current_prod = self.objectives[solution_idx, 0]
+            current_eff = self.objectives[solution_idx, 1]
+            optimal_prod = self.optimal_point[0]
+            optimal_eff = self.optimal_point[1]
+            
+            if current_prod < optimal_prod and current_eff < optimal_eff:
+                recommendations.append("⚠️ Решение можно улучшить по обоим критериям (производительность и КПД)")
+            elif current_prod < optimal_prod:
+                recommendations.append("⚠️ Решение можно улучшить по производительности")
+            elif current_eff < optimal_eff:
+                recommendations.append("⚠️ Решение можно улучшить по КПД")
+
+        # Рекомендации по насосу
+        pump_rec = []
+        for name, value in self.pump_params.items():
+            if 'КПД' in name:
+                if value < 90:
+                    pump_rec.append(f"{name}: возможно увеличение до {min(100, value * 1.15):.1f}")
+            elif 'давление' in name.lower():
+                req_pressure = current_values['Давление на выходе (атм) ↑']
+                if value < req_pressure * 1.1:
+                    pump_rec.append(f"{name}: рекомендуется запас минимум 10% (требуется {req_pressure * 1.1:.1f} атм)")
+
+        if pump_rec:
+            recommendations.append("Рекомендации по насосу:")
+            recommendations.extend(pump_rec)
+
+        # Общие рекомендации по эффективности
+        if system_eff < 70:
+            recommendations.append("Внимание: низкий КПД системы! Рекомендуется проверить износ оборудования и параметры насоса.")
+        elif system_eff > 90:
+            recommendations.append("Система работает с высокой эффективностью.")
+
+        if productivity < 10:
+            recommendations.append("Внимание: низкая производительность! Рекомендуется проверить мощность насосов и давление в системе.")
 
         return recommendations
-
-def create_plot_all(optimizer):
-    plt.figure(figsize=(8, 5))
-    if optimizer.productivity is not None and optimizer.current_consumption is not None:
-        plt.scatter(optimizer.productivity, optimizer.current_consumption,
-                   c='gray', s=5, alpha=0.5)
-
-    if optimizer.pareto_front is not None and len(optimizer.pareto_front) > 0:
-        pf_prod = optimizer.pareto_front[:, 0]
-        pf_current = optimizer.pareto_front[:, 1]
-        order = np.argsort(pf_prod)
-        plt.plot(pf_prod[order], pf_current[order], 'r--', alpha=0.8, linewidth=1.5)
-        if optimizer.optimal_point is not None:
-            plt.scatter(optimizer.optimal_point[0], optimizer.optimal_point[1],
-                       c='blue', s=100, label='Оптимальное')
-
-    plt.xlabel('Производительность', fontsize=10)
-    plt.ylabel('Потребление тока (А)', fontsize=10)
-    plt.grid(True, linestyle=':', alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-
-    return plot_to_base64(plt)
-
-def create_plot_pareto(optimizer):
-    plt.figure(figsize=(8, 5))
-
-    if optimizer.pareto_front is not None and len(optimizer.pareto_front) > 0:
-        pf_prod = optimizer.pareto_front[:, 0]
-        pf_current = optimizer.pareto_front[:, 1]
-        order = np.argsort(pf_prod)
-        plt.plot(pf_prod[order], pf_current[order], 'r--', alpha=0.8, linewidth=1.5)
-        if optimizer.optimal_point is not None:
-            plt.scatter(optimizer.optimal_point[0], optimizer.optimal_point[1],
-                       c='blue', s=100, label='Оптимальное')
-
-        if optimizer.productivity is not None and optimizer.current_consumption is not None:
-            current_point = (np.mean(optimizer.productivity), np.mean(optimizer.current_consumption))
-            plt.scatter(current_point[0], current_point[1],
-                       c='green', s=100, marker='s', label='Текущее')
-            if optimizer.optimal_point is not None:
-                plt.plot([current_point[0], optimizer.optimal_point[0]],
-                        [current_point[1], optimizer.optimal_point[1]],
-                        'g-', alpha=0.5, linewidth=2)
-
-    plt.xlabel('Производительность', fontsize=10)
-    plt.ylabel('Потребление тока (А)', fontsize=10)
-    plt.grid(True, linestyle=':', alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-
-    return plot_to_base64(plt)
-
-def create_plot_selected(optimizer, x, y):
-    plt.figure(figsize=(8, 5))
-
-    if optimizer.productivity is not None and optimizer.current_consumption is not None:
-        plt.scatter(optimizer.productivity, optimizer.current_consumption,
-                   c='gray', s=5, alpha=0.5)
-
-    if optimizer.pareto_front is not None and len(optimizer.pareto_front) > 0:
-        pf_prod = optimizer.pareto_front[:, 0]
-        pf_current = optimizer.pareto_front[:, 1]
-        order = np.argsort(pf_prod)
-        plt.plot(pf_prod[order], pf_current[order], 'r--', alpha=0.8, linewidth=1.5)
-        if optimizer.optimal_point is not None:
-            plt.scatter(optimizer.optimal_point[0], optimizer.optimal_point[1],
-                       c='blue', s=100, label='Оптимальное')
-
-    plt.scatter(x, y, c='cyan', s=100, marker='s', label='Выбранное')
-    if optimizer.optimal_point is not None:
-        plt.plot([x, optimizer.optimal_point[0]],
-                [y, optimizer.optimal_point[1]],
-                'c-', alpha=0.5, linewidth=2)
-
-    plt.xlabel('Производительность', fontsize=10)
-    plt.ylabel('Потребление тока (А)', fontsize=10)
-    plt.grid(True, linestyle=':', alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-
-    return plot_to_base64(plt)
-
-def plot_to_base64(plt):
-    buffer = BytesIO()
-    plt.savefig(buffer, format='png', dpi=100)
-    plt.close()
-    buffer.seek(0)
-    image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-    return f"data:image/png;base64,{image_base64}"
-
-# Пример использования с реальными данными БКНС
-input_values = {
-    'Мощность насосов (кВт) ↑': 55,
-    'Давление на выходе (атм) ↑': 16,
-    'Потребление тока (А) ↓': 100,
-    'Энергопотребление (кВт·ч) ↓': 75,
-    'Износ оборудования (%) ↓ [0-100]': 20,
-    'Температура двигателя (°C) ↓ [0-120]': 80,
-    'Квалификация рабочих (баллы) ↑ [0-10]': 7,
-    'КПД насоса (%) ↑ [0-100]': 85,
-    'Затраты на ТО (руб/ч) ↓': 500,
-    'Возраст оборудования (лет) ↓': 5
-}
-
-optimizer = ParetoOptimizer()
-optimizer.generate_solutions(100, input_values)
-
-# Создание графиков
-plot_all = create_plot_all(optimizer)
-plot_pareto = create_plot_pareto(optimizer)
-
-# Пример выбора точки
-x, y = 60, 90
-plot_selected = create_plot_selected(optimizer, x, y)
-
-# Получение рекомендаций
-recommendations = optimizer.get_recommendations()
-print(recommendations)
