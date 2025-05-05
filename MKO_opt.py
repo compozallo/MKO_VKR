@@ -3,6 +3,8 @@ import numpy as np
 import yadisk
 import pandas as pd
 import os
+import io
+
 
 class ParetoOptimizer:
     def __init__(self):
@@ -57,18 +59,32 @@ class ParetoOptimizer:
         self.load_forecast_data()
 
     def load_forecast_data(self):
-        """Загрузка прогнозных данных из CSV"""
-        try:
-            y = yadisk.YaDisk(token="y0__xDypu3yARjTsTcgx67a-RJgY8JQajMm1lnIvrfxvQbbjE-r-g")
-            if y.check_token():
-                if not os.path.exists("forecast_downloaded.csv"):
-                    y.download("/ВКР/forecast.csv", "forecast_downloaded.csv")
 
-                df = pd.read_csv("forecast_downloaded.csv", header=None, names=['timestamp', 'value'])
-                self.last_forecast_value = float(df.iloc[-1]['value'])
-        except Exception as e:
-            print(f"Ошибка загрузки прогнозных данных: {e}")
-            self.last_forecast_value = 50.0
+        # Параметры
+        TOKEN = "y0__xDypu3yARjTsTcgx67a-RJgY8JQajMm1lnIvrfxvQbbjE-r-g"  # ваш OAuth-токен
+        remote_file_path = "/ВКР/forecast.csv"  # путь к файлу на Яндекс.Диске
+
+        # Подключение
+        y = yadisk.YaDisk(token=TOKEN)
+
+        # Проверка токена
+        if not y.check_token():
+            raise Exception("Ошибка токена! Проверьте правильность доступа.")
+
+        # Чтение файла в память
+        buffer = io.BytesIO()
+        y.download(remote_file_path, buffer)
+        buffer.seek(0)  # Обязательно перемотать в начало!
+
+        # Чтение CSV напрямую в pandas
+        df_forecast = pd.read_csv(buffer)
+
+
+
+        # Просмотр
+        print("Прогнозированные данные:")
+        print(df_forecast.head())
+        self.last_forecast_value = float(df_forecast.iloc[-1]['val'])
 
     def calculate_system_efficiency(self, params):
         """Расчет КПД системы"""
