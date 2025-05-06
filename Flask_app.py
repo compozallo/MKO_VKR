@@ -1,4 +1,3 @@
-
 from flask import Flask, render_template_string, request, jsonify
 from werkzeug.serving import run_simple
 import socket
@@ -6,24 +5,26 @@ from MKO_opt import ParetoOptimizer
 import numpy as np
 from io import BytesIO
 import base64
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from datetime import datetime
 
 app = Flask(__name__)
 optimizer = ParetoOptimizer()
 
-# Обновлённые значения по умолчанию (без КПД и Производительности)
+# Значения по умолчанию
 default_values = {
-    'Мощность насосов (кВт) ↑': 55,
-    'Давление на выходе (атм) ↑': 16,
-    'Износ оборудования (%) ↓ [0-100]': 20,
-    'Затраты на ТО (руб/ч) ↓': 500,
-    'Возраст оборудования (лет) ↓': 5,
-    'Общая эффективность ↑': 75
+    'Давление на выходе (атм) ↑': 18,
+    'Износ оборудования (%) ↓ [0-100]': 25,
+    'Затраты на ТО (руб/ч) ↓': 600,
+    'Возраст оборудования (лет) ↓': 7,
+    'Общая эффективность ↑': 80,
+    'Требуемая производительность (т/ч) ↑': 0
 }
 
 def create_plot_all(optimizer):
     plt.figure(figsize=(10, 6))
-
     if optimizer.objectives is not None:
         plt.scatter(optimizer.objectives[:, 0], optimizer.objectives[:, 1],
                    c=optimizer.objectives[:, 2], cmap='viridis', s=10, alpha=0.6)
@@ -45,12 +46,10 @@ def create_plot_all(optimizer):
     plt.grid(True, linestyle=':', alpha=0.5)
     plt.legend()
     plt.tight_layout()
-
     return plot_to_base64(plt)
 
 def create_plot_pareto(optimizer):
     plt.figure(figsize=(10, 6))
-
     if optimizer.pareto_front is not None and len(optimizer.pareto_front) > 0:
         pf_prod = optimizer.pareto_front[:, 0]
         pf_eff = optimizer.pareto_front[:, 1]
@@ -73,12 +72,10 @@ def create_plot_pareto(optimizer):
     plt.grid(True, linestyle=':', alpha=0.5)
     plt.legend()
     plt.tight_layout()
-
     return plot_to_base64(plt)
 
 def create_plot_selected(optimizer, x, y):
     plt.figure(figsize=(10, 6))
-
     if optimizer.objectives is not None:
         plt.scatter(optimizer.objectives[:, 0], optimizer.objectives[:, 1],
                    c=optimizer.objectives[:, 2], cmap='viridis', s=10, alpha=0.3)
@@ -106,7 +103,6 @@ def create_plot_selected(optimizer, x, y):
     plt.grid(True, linestyle=':', alpha=0.5)
     plt.legend()
     plt.tight_layout()
-
     return plot_to_base64(plt)
 
 def plot_to_base64(plt):
@@ -138,9 +134,24 @@ def index():
             except:
                 pass
 
-        for name in optimizer.pump_params:
+        for pump_name in optimizer.pumps:
+            for param_name in optimizer.pumps[pump_name]:
+                if param_name == 'Включен':
+                    continue
+                try:
+                    optimizer.pumps[pump_name][param_name] = float(
+                        request.form.get(f"{pump_name}_{param_name}", optimizer.pumps[pump_name][param_name]))
+                except:
+                    pass
+
+        for pump_name in optimizer.pumps:
+            optimizer.pumps[pump_name]['Включен'] = request.form.get(f"{pump_name}_enabled") == "on"
+
+        if 'set_forecast' in request.form:
             try:
-                optimizer.pump_params[name] = float(request.form.get(f"pump_{name}", optimizer.pump_params[name]))
+                forecast_value = float(request.form.get('forecast_value', 0))
+                optimizer.set_required_productivity(forecast_value)
+                input_values['Требуемая производительность (т/ч) ↑'] = forecast_value
             except:
                 pass
 
@@ -153,7 +164,9 @@ def index():
 
         fig1 = create_plot_all(optimizer)
         fig2 = create_plot_pareto(optimizer)
-        recommendations = optimizer.get_recommendations()
+
+        general_recommendations = optimizer.get_general_recommendations()
+        forecast_recommendations = optimizer.get_forecast_recommendations() if optimizer.required_productivity else []
 
         optimal_point_list = None
         if optimizer.optimal_point is not None:
@@ -167,13 +180,16 @@ def index():
         else:
             prod_min, prod_max, eff_min, eff_max = 0, 1, 0, 1
 
+        forecast_table = optimizer.get_forecast_table()
+
         return render_template_string(get_html_template(),
                                    plot1=fig1,
                                    plot2=fig2,
-                                   recommendations=recommendations,
+                                   general_recommendations=general_recommendations,
+                                   forecast_recommendations=forecast_recommendations,
                                    criteria_names=optimizer.criteria_names,
                                    default_values=default_values,
-                                   pump_params=optimizer.pump_params,
+                                   pumps=optimizer.pumps,
                                    num_solutions=num_solutions,
                                    optimal_point=optimal_point_list,
                                    local_ip=get_local_ip(),
@@ -181,15 +197,18 @@ def index():
                                    prod_max=prod_max,
                                    eff_min=eff_min,
                                    eff_max=eff_max,
-                                   last_forecast=optimizer.last_forecast_value)
+                                   forecast_table=forecast_table,
+                                   required_productivity=optimizer.required_productivity)
 
+    forecast_table = optimizer.get_forecast_table()
     return render_template_string(get_html_template(),
                                plot1=None,
                                plot2=None,
-                               recommendations=None,
+                               general_recommendations=None,
+                               forecast_recommendations=None,
                                criteria_names=optimizer.criteria_names,
                                default_values=default_values,
-                               pump_params=optimizer.pump_params,
+                               pumps=optimizer.pumps,
                                num_solutions=1000,
                                optimal_point=None,
                                local_ip=get_local_ip(),
@@ -197,7 +216,27 @@ def index():
                                prod_max=1,
                                eff_min=0,
                                eff_max=1,
-                               last_forecast=optimizer.last_forecast_value)
+                               forecast_table=forecast_table,
+                               required_productivity=None)
+
+@app.route('/toggle_pump', methods=['POST'])
+def toggle_pump():
+    try:
+        pump_name = request.json['pump_name']
+        state = request.json['state']
+        optimizer.toggle_pump(pump_name, state)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/set_required_productivity', methods=['POST'])
+def set_required_productivity():
+    try:
+        value = float(request.json['value'])
+        optimizer.set_required_productivity(value)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
 
 @app.route('/select_point', methods=['POST'])
 def select_point():
@@ -211,7 +250,7 @@ def select_point():
     if solution_idx is None:
         return jsonify({'error': 'No solutions available'}), 400
 
-    recommendations = optimizer.get_recommendations(solution_idx)
+    recommendations = optimizer.get_general_recommendations(solution_idx)
     solution_values = {name: float(optimizer.solutions[solution_idx, i])
                       for i, name in enumerate(optimizer.criteria_names)}
 
@@ -249,6 +288,22 @@ def get_html_template():
         .info-box { background: #e7f3fe; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
         .forecast-box { background: #fff3cd; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
         .pump-params { background: #e2e3e5; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+        .pump-control { display: flex; align-items: center; margin-bottom: 10px; }
+        .pump-switch { position: relative; display: inline-block; width: 60px; height: 34px; margin-right: 10px; }
+        .pump-switch input { opacity: 0; width: 0; height: 0; }
+        .pump-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
+        .pump-slider:before { position: absolute; content: ""; height: 26px; width: 26px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .pump-slider { background-color: #4CAF50; }
+        input:checked + .pump-slider:before { transform: translateX(26px); }
+        .pump-status { font-weight: bold; }
+        .pump-status.on { color: #4CAF50; }
+        .pump-status.off { color: #f44336; }
+        .forecast-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #eee; }
+        .forecast-item:last-child { border-bottom: none; }
+        .add-forecast-btn { background-color: #2196F3; padding: 5px 10px; font-size: 0.9em; }
+        .selected-forecast { background-color: #e7f3fe; }
+        .required-productivity-box { background: #e8f5e9; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+        .recommendations-box { background: #fff3cd; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
         h1 { color: #333; }
         h2 { color: #444; margin-top: 0; }
         h3 { color: #555; }
@@ -269,20 +324,56 @@ def get_html_template():
             </div>
 
             <div class="forecast-box">
-                <h3>Прогнозируемое значение</h3>
-                <p>Последнее значение из CSV: <strong>{{ "%.2f"|format(last_forecast) }}</strong></p>
+                <h3>Прогнозируемые значения (т/ч)</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Время</th>
+                            <th>Значение</th>
+                            <th>Действие</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for forecast in forecast_table %}
+                        <tr>
+                            <td>{{ forecast['timestamp'] }}</td>
+                            <td>{{ "%.2f"|format(forecast['val']) }}</td>
+                            <td>
+                                <button class="add-forecast-btn" onclick="setRequiredProductivity({{ forecast['val'] }})">
+                                    Добавить
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="required-productivity-box">
+                <h3>Требуемая производительность</h3>
+                <form method="post">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <input type="number" step="0.1" name="forecast_value"
+                               value="{{ "%.2f"|format(required_productivity) if required_productivity else '' }}"
+                               placeholder="Введите значение" style="flex-grow: 1;">
+                        <button type="submit" name="set_forecast">Установить</button>
+                    </div>
+                </form>
+                {% if required_productivity %}
+                <p>Установлено: <strong>{{ "%.2f"|format(required_productivity) }} т/ч</strong></p>
+                {% endif %}
             </div>
 
             <div class="tab">
                 <button class="tablinks active" onclick="openTab(event, 'mainParams')">Основные</button>
-                <button class="tablinks" onclick="openTab(event, 'pumpParams')">Насос</button>
+                <button class="tablinks" onclick="openTab(event, 'pumpParams')">Насосы</button>
             </div>
 
             <div id="mainParams" class="tabcontent" style="display: block;">
                 <h2>Параметры системы</h2>
                 <form method="post">
                     <table>
-                        {% for name in criteria_names %}
+                        {% for name in criteria_names if name != 'Требуемая производительность (т/ч) ↑' %}
                         <tr>
                             <td>{{ name }}</td>
                             <td><input type="number" step="0.1" name="{{ name }}" value="{{ default_values[name] }}" required></td>
@@ -299,17 +390,28 @@ def get_html_template():
             </div>
 
             <div id="pumpParams" class="tabcontent">
-                <h2>Параметры насоса</h2>
+                <h2>Управление насосами</h2>
                 <form method="post">
+                    {% for pump_name, pump in pumps.items() %}
+                    <div class="pump-control">
+                        <label class="pump-switch">
+                            <input type="checkbox" name="{{ pump_name }}_enabled" {% if pump['Включен'] %}checked{% endif %} onchange="togglePump('{{ pump_name }}', this.checked)">
+                            <span class="pump-slider"></span>
+                        </label>
+                        <span class="pump-status {% if pump['Включен'] %}on{% else %}off{% endif %}">
+                            {{ pump['Название'] }}: {% if pump['Включен'] %}ВКЛ{% else %}ВЫКЛ{% endif %}
+                        </span>
+                    </div>
                     <table>
-                        {% for name, value in pump_params.items() %}
+                        {% for param_name, param_value in pump.items() if param_name != 'Включен' and param_name != 'Название' %}
                         <tr>
-                            <td>{{ name }}</td>
-                            <td><input type="number" step="0.1" name="pump_{{ name }}" value="{{ value }}" required></td>
+                            <td>{{ param_name }}</td>
+                            <td><input type="number" step="0.1" name="{{ pump_name }}_{{ param_name }}" value="{{ param_value }}" required></td>
                         </tr>
                         {% endfor %}
                     </table>
                     <br>
+                    {% endfor %}
                     <button type="submit">Обновить параметры</button>
                 </form>
             </div>
@@ -348,6 +450,28 @@ def get_html_template():
             {% else %}
             <h2>Результаты оптимизации</h2>
             <p>Введите параметры системы и нажмите "Рассчитать оптимизацию"</p>
+            {% endif %}
+
+            {% if forecast_recommendations %}
+            <div class="recommendations-box">
+                <h3>Рекомендации для требуемой производительности</h3>
+                <ul>
+                    {% for rec in forecast_recommendations %}
+                    <li>{{ rec }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            {% if general_recommendations %}
+            <div class="recommendations-box">
+                <h3>Общие рекомендации по оптимизации</h3>
+                <ul>
+                    {% for rec in general_recommendations %}
+                    <li>{{ rec }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
             {% endif %}
         </div>
     </div>
@@ -403,11 +527,10 @@ def get_html_template():
                 for (const [name, value] of Object.entries(data.solution_values)) {
                     valuesHtml += `<tr><td>${name}</td><td>${value.toFixed(2)}</td></tr>`;
                 }
-                
-                // Добавляем расчетные параметры
+
                 const productivity = {{ prod_min }} + (x - {{ prod_min }}) / ({{ prod_max }} - {{ prod_min }}) * ({{ prod_max }} - {{ prod_min }});
                 const efficiency = {{ eff_min }} + (y - {{ eff_min }}) / ({{ eff_max }} - {{ eff_min }}) * ({{ eff_max }} - {{ eff_min }});
-                
+
                 valuesHtml += `<tr><td>Производительность (расчетная)</td><td>${productivity.toFixed(2)} т/ч</td></tr>`;
                 valuesHtml += `<tr><td>КПД системы (расчетный)</td><td>${efficiency.toFixed(2)}%</td></tr>`;
                 valuesHtml += '</table>';
@@ -425,6 +548,58 @@ def get_html_template():
             .catch(error => {
                 console.error('Error:', error);
                 alert('Произошла ошибка при обработке запроса');
+            });
+        }
+
+        function togglePump(pumpName, state) {
+            fetch('/toggle_pump', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ pump_name: pumpName, state: state })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+                const statusElements = document.querySelectorAll(`.pump-status`);
+                statusElements.forEach(el => {
+                    if (el.textContent.includes(pumpName)) {
+                        el.textContent = `${pumpName}: ${state ? 'ВКЛ' : 'ВЫКЛ'}`;
+                        el.classList.toggle('on', state);
+                        el.classList.toggle('off', !state);
+                    }
+                });
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Произошла ошибка при переключении насоса');
+            });
+        }
+
+        function setRequiredProductivity(value) {
+            fetch('/set_required_productivity', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ value: value })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+                document.querySelector('input[name="forecast_value"]').value = value;
+                window.location.reload();
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Произошла ошибка при установке требуемой производительности');
             });
         }
     </script>
