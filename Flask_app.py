@@ -8,7 +8,6 @@ app = Flask(__name__)
 optimizer = ParetoOptimizer()
 selected_point = None
 
-
 def get_local_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -19,7 +18,6 @@ def get_local_ip():
     finally:
         s.close()
     return IP
-
 
 def create_main_plot_json():
     global selected_point
@@ -38,7 +36,7 @@ def create_main_plot_json():
                 colorbar=dict(title='Общая эффективность')
             ),
             name='Все решения',
-            customdata=np.arange(len(optimizer.objectives)),
+            customdata=np.arange(len(optimizer.objectives)).tolist(),
             hoverinfo='text',
             hovertext=[f'П: {x:.2f} т/ч<br>КПД: {y:.2f}%' for x, y in zip(optimizer.objectives[:, 0], optimizer.objectives[:, 1])]
         ))
@@ -64,7 +62,7 @@ def create_main_plot_json():
                 line=dict(color='orange', width=3),
                 marker=dict(size=10, color='orange'),
                 name='Парето-фронт',
-                customdata=order,
+                customdata=order.tolist(),
                 hoverinfo='text',
                 hovertext=[f'Парето: {x:.2f}, {y:.2f}' for x, y in zip(pf[order, 0], pf[order, 1])]
             ))
@@ -89,13 +87,11 @@ def create_main_plot_json():
     )
     return fig.to_dict()
 
-
 def create_path_plot_json():
     global selected_point
     fig = go.Figure()
 
     if optimizer.objectives is not None and len(optimizer.objectives) > 0:
-        # Все решения тускло
         fig.add_trace(go.Scatter(
             x=optimizer.objectives[:, 0],
             y=optimizer.objectives[:, 1],
@@ -105,7 +101,6 @@ def create_path_plot_json():
             hoverinfo='skip'
         ))
 
-        # Парето фронт
         if optimizer.pareto_front is not None and len(optimizer.pareto_front) > 0:
             pf = optimizer.pareto_front
             order = np.argsort(pf[:, 0])
@@ -118,7 +113,6 @@ def create_path_plot_json():
                 name='Парето-фронт'
             ))
 
-    # Определяем целевую точку для пути
     target_point = selected_point
     if target_point is None and optimizer.optimal_point is not None:
         target_point = optimizer.optimal_point[:2]
@@ -157,7 +151,6 @@ def create_path_plot_json():
     )
     return fig.to_dict()
 
-
 @app.route('/move_point', methods=['POST'])
 def move_point():
     global selected_point
@@ -169,7 +162,7 @@ def move_point():
     idx = optimizer.find_closest_solution(x, y)
     main_plot = create_main_plot_json()
     path_plot = create_path_plot_json()
-    radar_chart = optimizer.create_radar_chart()
+    radar_chart = optimizer.create_radar_chart_json()
     detailed = optimizer.get_detailed_recommendations(idx)
     general = optimizer.get_general_recommendations(idx)
     return jsonify({
@@ -179,7 +172,6 @@ def move_point():
         'detailed': detailed,
         'general': general
     })
-
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -215,15 +207,14 @@ def index():
         default_values=default_values,
         num_solutions=num_solutions,
         pumps=optimizer.pumps,
-        main_plot=create_main_plot_json(),
-        path_plot=create_path_plot_json(),
-        radar_chart=optimizer.create_radar_chart() if optimizer.current_values else None,
+        main_plot=optimizer.create_main_plot_json(),
+        path_plot=optimizer.create_path_plot_json(),
+        radar_chart=optimizer.create_radar_chart_json() if optimizer.current_values else None,
         general_recommendations=optimizer.get_general_recommendations() if optimizer.current_values else [],
         detailed_recommendations=[],
         forecast_recommendations=optimizer.get_forecast_recommendations() if optimizer.current_values else [],
         forecast_table=optimizer.get_forecast_table_html()
     )
-
 
 if __name__ == '__main__':
     ip = get_local_ip()

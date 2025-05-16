@@ -4,6 +4,7 @@ import io
 from typing import Dict, List, Tuple
 import yadisk
 from scipy.spatial.distance import euclidean
+import plotly.graph_objects as go
 
 class ParetoOptimizer:
     def __init__(self):
@@ -288,7 +289,148 @@ class ParetoOptimizer:
             recs.append(f"Активные насосы: {', '.join(active)}")
         return recs
     
-    def create_radar_chart(self):
+    @staticmethod
+    def _convert_np_arrays(obj):
+        if isinstance(obj, dict):
+            return {k: ParetoOptimizer._convert_np_arrays(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [ParetoOptimizer._convert_np_arrays(i) for i in obj]
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return obj
+    
+    def create_main_plot_json(self):
+        fig = go.Figure()
+        if self.objectives is not None:
+            fig.add_trace(go.Scatter(
+                x=self.objectives[:, 0],
+                y=self.objectives[:, 1],
+                mode='markers',
+                marker=dict(
+                    color=self.objectives[:, 2],
+                    colorscale='Viridis',
+                    size=8,
+                    opacity=0.5,
+                    colorbar=dict(title='Общая эффективность')
+                ),
+                name='Все решения',
+                customdata=list(range(len(self.objectives))),
+                hoverinfo='text',
+                hovertext=[f'П: {x:.2f} т/ч<br>КПД: {y:.2f}%' for x, y in zip(self.objectives[:, 0], self.objectives[:, 1])]
+            ))
+
+            if hasattr(self, 'selected_point') and self.selected_point:
+                fig.add_trace(go.Scatter(
+                    x=[self.selected_point[0]],
+                    y=[self.selected_point[1]],
+                    mode='markers+text',
+                    marker=dict(size=14, color='red', symbol='circle'),
+                    name='Целевая точка',
+                    text=["Перетащи меня"],
+                    textposition="top center"
+                ))
+
+            if self.pareto_front is not None and len(self.pareto_front) > 0:
+                pf = self.pareto_front
+                order = np.argsort(pf[:, 0])
+                fig.add_trace(go.Scatter(
+                    x=pf[order, 0],
+                    y=pf[order, 1],
+                    mode='lines+markers',
+                    line=dict(color='orange', width=3),
+                    marker=dict(size=10, color='orange'),
+                    name='Парето-фронт',
+                    customdata=order.tolist(),
+                    hoverinfo='text',
+                    hovertext=[f'Парето: {x:.2f}, {y:.2f}' for x, y in zip(pf[order, 0], pf[order, 1])]
+                ))
+
+            # Оптимум звёздочкой
+            if self.optimal_point is not None:
+                fig.add_trace(go.Scatter(
+                    x=[self.optimal_point[0]],
+                    y=[self.optimal_point[1]],
+                    mode='markers',
+                    marker=dict(size=20, color='gold', symbol='star'),
+                    name='Оптимум'
+                ))
+
+        fig.update_layout(
+            title='Парето-фронт и решения',
+            xaxis_title='Производительность (т/ч)',
+            yaxis_title='КПД (%)',
+            dragmode='select',
+            clickmode='event+select',
+            height=600
+        )
+        fig_dict = fig.to_dict()
+        return self._convert_np_arrays(fig_dict)
+
+    def create_path_plot_json(self):
+        fig = go.Figure()
+        if self.objectives is not None:
+            fig.add_trace(go.Scatter(
+                x=self.objectives[:, 0],
+                y=self.objectives[:, 1],
+                mode='markers',
+                marker=dict(color=self.objectives[:, 2], colorscale='Viridis', size=8, opacity=0.3),
+                name='Все решения',
+                hoverinfo='skip'
+            ))
+
+            if self.pareto_front is not None and len(self.pareto_front) > 0:
+                pf = self.pareto_front
+                order = np.argsort(pf[:, 0])
+                fig.add_trace(go.Scatter(
+                    x=pf[order, 0],
+                    y=pf[order, 1],
+                    mode='lines+markers',
+                    line=dict(color='orange', width=3),
+                    marker=dict(size=10, color='orange'),
+                    name='Парето-фронт'
+                ))
+
+        target_point = getattr(self, 'selected_point', None)
+        if target_point is None and self.optimal_point is not None:
+            target_point = self.optimal_point[:2]
+
+        if target_point is not None:
+            idx = self.find_closest_solution(target_point[0], target_point[1])
+            if idx is not None:
+                path = self.get_path_to_solution(idx)
+                if path:
+                    x_vals, y_vals = zip(*path)
+                    fig.add_trace(go.Scatter(
+                        x=x_vals, y=y_vals,
+                        mode='lines+markers',
+                        line=dict(color='purple', width=4),
+                        marker=dict(size=8),
+                        name='Путь к решению'
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=[x_vals[0]], y=[y_vals[0]],
+                        mode='markers',
+                        marker=dict(size=14, color='red'),
+                        name='Текущее состояние'
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=[x_vals[-1]], y=[y_vals[-1]],
+                        mode='markers',
+                        marker=dict(size=16, color='blue', symbol='star'),
+                        name='Цель'
+                    ))
+
+        fig.update_layout(
+            title='Путь к цели',
+            xaxis_title='Производительность (т/ч)',
+            yaxis_title='КПД (%)',
+            height=600
+        )
+        fig_dict = fig.to_dict()
+        return self._convert_np_arrays(fig_dict)
+
+    def create_radar_chart_json(self):
         active_params = [
             'Давление на выходе (атм) ↑',
             'Износ оборудования (%) ↓ [0-100]',
@@ -321,7 +463,6 @@ class ParetoOptimizer:
                 if optimal:
                     opt_norm.append(optimal[p] / 100)
 
-        import plotly.graph_objects as go
         fig = go.Figure()
         if optimal:
             fig.add_trace(go.Scatterpolar(
@@ -344,5 +485,6 @@ class ParetoOptimizer:
             title='Радарная диаграмма параметров',
             font=dict(family="Arial, sans-serif"),
             margin=dict(l=30, r=30, t=50, b=30)
-      )
-        return fig.to_html(full_html=False)
+        )
+        fig_dict = fig.to_dict()
+        return self._convert_np_arrays(fig_dict)
