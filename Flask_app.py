@@ -162,16 +162,17 @@ def move_point():
     idx = optimizer.find_closest_solution(x, y)
     main_plot = create_main_plot_json()
     path_plot = create_path_plot_json()
-    radar_chart = optimizer.create_radar_chart_json()
+    radar_chart = optimizer.create_radar_chart()  # возвращаем HTML строку, а не JSON
     detailed = optimizer.get_detailed_recommendations(idx)
     general = optimizer.get_general_recommendations(idx)
     return jsonify({
         'main_plot': main_plot,
         'path_plot': path_plot,
-        'radar_chart': radar_chart,
+        'radar_chart': radar_chart,  # HTML строка
         'detailed': detailed,
         'general': general
     })
+
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -207,14 +208,15 @@ def index():
         default_values=default_values,
         num_solutions=num_solutions,
         pumps=optimizer.pumps,
-        main_plot=optimizer.create_main_plot_json(),
-        path_plot=optimizer.create_path_plot_json(),
-        radar_chart=optimizer.create_radar_chart_json() if optimizer.current_values else None,
+        main_plot=create_main_plot_json(),
+        path_plot=create_path_plot_json(),
+        radar_chart=optimizer.create_radar_chart() if optimizer.current_values else None,
         general_recommendations=optimizer.get_general_recommendations() if optimizer.current_values else [],
         detailed_recommendations=[],
         forecast_recommendations=optimizer.get_forecast_recommendations() if optimizer.current_values else [],
         forecast_table=optimizer.get_forecast_table_html()
     )
+
 
 if __name__ == '__main__':
     ip = get_local_ip()

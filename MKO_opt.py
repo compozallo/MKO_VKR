@@ -429,8 +429,8 @@ class ParetoOptimizer:
         )
         fig_dict = fig.to_dict()
         return self._convert_np_arrays(fig_dict)
-
-    def create_radar_chart_json(self):
+    
+    def create_radar_chart(self):
         active_params = [
             'Давление на выходе (атм) ↑',
             'Износ оборудования (%) ↓ [0-100]',
@@ -439,6 +439,7 @@ class ParetoOptimizer:
             'КПД системы (%)',
             'Производительность (т/ч)'
         ]
+
         current = self.current_values.copy()
         current['КПД системы (%)'] = self.calculate_system_efficiency(current)
         current['Производительность (т/ч)'] = self.calculate_productivity(current['Давление на выходе (атм) ↑'])
@@ -486,5 +487,4 @@ class ParetoOptimizer:
             font=dict(family="Arial, sans-serif"),
             margin=dict(l=30, r=30, t=50, b=30)
         )
-        fig_dict = fig.to_dict()
-        return self._convert_np_arrays(fig_dict)
+        return fig.to_html(full_html=False)
