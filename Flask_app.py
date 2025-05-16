@@ -50,7 +50,7 @@ def create_main_plot_json():
                 mode='markers+text',
                 marker=dict(size=14, color='red', symbol='circle'),
                 name='Целевая точка',
-                text=["Перетащи меня"],
+                text=["Перетащить"],
                 textposition="top center"
             ))
 
