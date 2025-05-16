@@ -3,8 +3,8 @@ import pandas as pd
 import io
 from typing import Dict, List, Tuple
 import yadisk
-from scipy.spatial.distance import euclidean
 import plotly.graph_objects as go
+
 
 class ParetoOptimizer:
     def __init__(self):
@@ -102,7 +102,7 @@ class ParetoOptimizer:
         df = self.forecast_data.copy()
         df['val'] = df['val'].round(6)
         return df.to_html(index=False, classes="table table-striped table-bordered")
-    
+
     def get_forecast_recommendations(self) -> list:
         if not self.required_productivity:
             return ["Требуемая производительность не задана"]
@@ -125,7 +125,6 @@ class ParetoOptimizer:
             if any(p['Включен'] for p in self.pumps.values()):
                 recs.append("• Отключить один из насосов")
         return recs
-
 
     def set_required_productivity(self, value: float):
         self.required_productivity = value
@@ -288,7 +287,7 @@ class ParetoOptimizer:
         else:
             recs.append(f"Активные насосы: {', '.join(active)}")
         return recs
-    
+
     @staticmethod
     def _convert_np_arrays(obj):
         if isinstance(obj, dict):
@@ -299,7 +298,7 @@ class ParetoOptimizer:
             return obj.tolist()
         else:
             return obj
-    
+
     def create_main_plot_json(self):
         fig = go.Figure()
         if self.objectives is not None:
@@ -429,7 +428,7 @@ class ParetoOptimizer:
         )
         fig_dict = fig.to_dict()
         return self._convert_np_arrays(fig_dict)
-    
+
     def create_radar_chart(self):
         active_params = [
             'Давление на выходе (атм) ↑',
