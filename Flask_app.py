@@ -2,21 +2,25 @@ from flask import Flask, render_template, request, jsonify
 import socket
 import numpy as np
 from MKO_opt import ParetoOptimizer
+import os
 
 app = Flask(__name__)
 optimizer = ParetoOptimizer()
 selected_point = None
 
-def get_local_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(('10.255.255.255', 1))
-        IP = s.getsockname()[0]
-    except:
-        IP = '127.0.0.1'
-    finally:
-        s.close()
-    return IP
+port = int(os.environ.get("PORT", 5000))
+app.run(host="0.0.0.0", port=port)
+
+#def get_local_ip():
+    #s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    #try:
+        #s.connect(('10.255.255.255', 1))
+        #IP = s.getsockname()[0]
+    #except:
+        #IP = '127.0.0.1'
+    #finally:
+        #s.close()
+    #return IP
 
 @app.route('/move_point', methods=['POST'])
 def move_point():
@@ -87,6 +91,8 @@ def index():
     )
 
 if __name__ == '__main__':
-    ip = get_local_ip()
-    print(f"Запущено на http://{ip}:1500")
-    app.run(host=ip, port=1500, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
+    #ip = get_local_ip()
+    #print(f"Запущено на http://{ip}:1500")
+    #app.run(host=ip, port=1500, debug=True)
