@@ -453,7 +453,11 @@ class ParetoOptimizer:
 
         cur_norm, opt_norm = [], []
         for p in active_params:
-            if p in self.criteria_limits:
+            if p == 'Затраты на ТО (руб/ч) ↓':
+                cur_norm.append(current[p]/1000)
+                if optimal:
+                    opt_norm.append(optimal[p]/1000)
+            elif p in self.criteria_limits:
                 low, high = self.criteria_limits[p]
                 cur_norm.append((current[p] - low) / (high - low))
                 if optimal:
