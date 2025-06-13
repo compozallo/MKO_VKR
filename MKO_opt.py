@@ -81,15 +81,44 @@ class ParetoOptimizer:
             df = pd.read_csv(buffer, names=['timestamp', 'val'], header=0)
             df['timestamp'] = pd.to_datetime(df['timestamp'])
             df = df.sort_values('timestamp').tail(5)
-            df['val'] = df['val'] / (1_000_000 * 4)
+            # Делим значения на 1,000,004
+            df['val'] = df['val'] / 1000004
             self.forecast_data = df
         except Exception as e:
             print(f"[WARN] Не удалось загрузить прогноз с Яндекс.Диска: {e}")
             test_dates = pd.date_range(end=pd.Timestamp.now(), periods=5, freq='10min')
+            # Для тестовых данных также делим на 1,000,004
             self.forecast_data = pd.DataFrame({
                 'timestamp': test_dates,
-                'val': [107.41, 107.44, 106.97, 107.60, 108.61]
+                'val': [50/1000004, 75/1000004, 100/1000004, 125/1000004, 150/1000004]
             })
+
+    def _find_pareto_front(self, points: np.ndarray) -> np.ndarray:
+        # Сортируем точки по возрастанию производительности (x)
+        idx = np.argsort(points[:, 0])
+        points = points[idx]
+        
+        pareto = []
+        max_eff = -np.inf
+        
+        # Проходим от минимальной к максимальной производительности
+        for i in range(len(points)):
+            if points[i, 1] > max_eff:
+                pareto.append(idx[i])
+                max_eff = points[i, 1]
+        
+        # Также проходим от максимальной к минимальной производительности
+        min_eff = np.inf
+        for i in range(len(points)-1, -1, -1):
+            if points[i, 1] < min_eff:
+                pareto.append(idx[i])
+                min_eff = points[i, 1]
+        
+        # Убираем дубликаты и возвращаем маску
+        pareto = list(set(pareto))
+        result = np.zeros(len(points), dtype=bool)
+        result[pareto] = True
+        return result
 
     def get_forecast_table(self) -> List[Dict]:
         if self.forecast_data is None:
@@ -207,19 +236,6 @@ class ParetoOptimizer:
         if len(self.pareto_front) > 0:
             self.optimal_point = self.pareto_front[np.argmax(self.pareto_front[:, 2])]
 
-    def _find_pareto_front(self, points: np.ndarray) -> np.ndarray:
-        idx = np.argsort(-points[:, 0])
-        points = points[idx]
-        pareto = []
-        max_eff = -np.inf
-        for i, p in enumerate(points):
-            if p[1] > max_eff:
-                pareto.append(idx[i])
-                max_eff = p[1]
-        result = np.zeros(len(idx), dtype=bool)
-        result[pareto] = True
-        return result
-
     def find_closest_solution(self, x: float, y: float) -> int:
         if self.solutions is None:
             return None
@@ -311,7 +327,7 @@ class ParetoOptimizer:
                     colorscale='Viridis',
                     size=8,
                     opacity=0.5,
-                    colorbar=dict(title='Общая эффективность')
+                    colorbar=dict(title='Общая эффективность', x=1.1)  # Сдвинули цветбар правее
                 ),
                 name='Все решения',
                 customdata=list(range(len(self.objectives))),
@@ -345,7 +361,6 @@ class ParetoOptimizer:
                     hovertext=[f'Парето: {x:.2f}, {y:.2f}' for x, y in zip(pf[order, 0], pf[order, 1])]
                 ))
 
-            # Оптимум звёздочкой
             if self.optimal_point is not None:
                 fig.add_trace(go.Scatter(
                     x=[self.optimal_point[0]],
@@ -361,7 +376,8 @@ class ParetoOptimizer:
             yaxis_title='КПД (%)',
             dragmode='select',
             clickmode='event+select',
-            height=600
+            height=600,
+            margin=dict(r=120)  # Добавили отступ справа для цветбара
         )
         fig_dict = fig.to_dict()
         return self._convert_np_arrays(fig_dict)
@@ -488,6 +504,6 @@ class ParetoOptimizer:
             showlegend=True,
             title='Радарная диаграмма параметров',
             font=dict(family="Arial, sans-serif"),
-            margin=dict(l=30, r=30, t=50, b=30)
+            margin=dict(l=100, r=100, t=50, b=30)  # Увеличили отступы
         )
         return fig.to_html(full_html=False)
