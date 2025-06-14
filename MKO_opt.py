@@ -106,24 +106,47 @@ class ParetoOptimizer:
     def get_forecast_recommendations(self) -> list:
         if not self.required_productivity:
             return ["Требуемая производительность не задана"]
+        
         recs = []
         cur_prod = self.calculate_productivity(self.current_values['Давление на выходе (атм) ↑'])
         diff = self.required_productivity - cur_prod
+        
+        active_pumps = [name for name, pump in self.pumps.items() if pump['Включен']]
+        max_possible = sum(pump['Макс. расход (м3/ч)'] * self.system_params['density'] / 1000 
+                        for name, pump in self.pumps.items() if pump['Включен'])
+        
         if abs(diff) < 0.1:
-            return ["Текущая производительность соответствует требуемой"]
-        if diff > 0:
+            recs.append("Текущая производительность соответствует требуемой")
+        elif diff > 0:
             recs.append(f"⚠️ Требуется увеличить производительность на {diff:.2f} т/ч")
-            for name, pump in self.pumps.items():
-                if not pump['Включен']:
-                    recs.append(f"• Включить {pump['Название']}")
+            
+            # Проверяем, можно ли включить дополнительные насосы
+            inactive_pumps = [name for name, pump in self.pumps.items() if not pump['Включен']]
+            
+            if inactive_pumps and (cur_prod + diff) > max_possible:
+                for pump_name in inactive_pumps:
+                    pump = self.pumps[pump_name]
+                    recs.append(f"• Рекомендуется включить {pump['Название']} (макс. {pump['Макс. расход (м3/ч)'] * self.system_params['density'] / 1000:.1f} т/ч)")
+            
+            # Предлагаем увеличить давление, если это возможно
             pressure_add = diff * 0.3
             new_pressure = min(self.criteria_limits['Давление на выходе (атм) ↑'][1],
                             self.current_values['Давление на выходе (атм) ↑'] + pressure_add)
             recs.append(f"• Увеличить давление до {new_pressure:.1f} атм")
         else:
             recs.append(f"⚡ Можно уменьшить производительность на {-diff:.2f} т/ч для экономии")
-            if any(p['Включен'] for p in self.pumps.values()):
-                recs.append("• Отключить один из насосов")
+            if len(active_pumps) > 1:
+                recs.append("• Можно отключить один из насосов для экономии энергии")
+        
+        # Добавляем информацию о текущей конфигурации насосов
+        if active_pumps:
+            recs.append(f"Текущая конфигурация: {len(active_pumps)} насос(а/ов) активны")
+            for name in active_pumps:
+                pump = self.pumps[name]
+                recs.append(f"  - {pump['Название']} ({pump['Макс. расход (м3/ч)'] * self.system_params['density'] / 1000:.1f} т/ч)")
+        else:
+            recs.append("⚠️ Внимание: ни один насос не включен!")
+            
         return recs
 
     def set_required_productivity(self, value: float):
@@ -259,6 +282,16 @@ class ParetoOptimizer:
                 else:
                     action = "изменить"
                 recs.append(f"{name}: {action} с {c:.2f} до {t:.2f} ({'+' if diff > 0 else '-'}{abs(diff):.2f})")
+        
+        # Добавляем рекомендации по насосам
+        active_pumps = [name for name, pump in self.pumps.items() if pump['Включен']]
+        if len(active_pumps) == 0:
+            recs.append("⚠️ Внимание: ни один насос не включен!")
+        else:
+            recs.append(f"Текущая конфигурация насосов: {len(active_pumps)} активен(ы)")
+            for name in active_pumps:
+                recs.append(f"  - {self.pumps[name]['Название']}")
+        
         return recs
 
     def get_general_recommendations(self, idx: int = None) -> List[str]:
@@ -281,11 +314,25 @@ class ParetoOptimizer:
         prod = self.calculate_productivity(values['Давление на выходе (атм) ↑'])
         recs.append(f"Текущая производительность: {prod:.2f} т/ч")
         recs.append(f"КПД системы: {eff:.1f}%")
-        active = [n for n, p in self.pumps.items() if p['Включен']]
-        if not active:
-            recs.append("⚠️ Ни один насос не включён")
+        
+        # Улучшенные рекомендации по насосам
+        active_pumps = [name for name, pump in self.pumps.items() if pump['Включен']]
+        max_possible = sum(pump['Макс. расход (м3/ч)'] * self.system_params['density'] / 1000 
+                        for name, pump in self.pumps.items() if pump['Включен'])
+        
+        if not active_pumps:
+            recs.append("⚠️ Внимание: ни один насос не включен!")
         else:
-            recs.append(f"Активные насосы: {', '.join(active)}")
+            recs.append(f"Активные насосы: {', '.join(active_pumps)} (макс. {max_possible:.1f} т/ч)")
+            
+            if self.required_productivity and (max_possible < self.required_productivity):
+                inactive_pumps = [name for name, pump in self.pumps.items() if not pump['Включен']]
+                if inactive_pumps:
+                    recs.append("⚠️ Требуемая производительность не достижима с текущими насосами")
+                    for pump_name in inactive_pumps:
+                        pump = self.pumps[pump_name]
+                        recs.append(f"• Рекомендуется включить {pump['Название']} (добавит {pump['Макс. расход (м3/ч)'] * self.system_params['density'] / 1000:.1f} т/ч)")
+        
         return recs
 
     @staticmethod
@@ -488,6 +535,7 @@ class ParetoOptimizer:
             showlegend=True,
             title='Радарная диаграмма параметров',
             font=dict(family="Arial, sans-serif"),
-            margin=dict(l=30, r=30, t=50, b=30)
+            margin=dict(l=30, r=30, t=50, b=30),
+            height=400  # Уменьшенная высота радарной диаграммы
         )
         return fig.to_html(full_html=False)
